@@ -849,6 +849,49 @@ impl BountyEscrowContract {
         monitoring::get_state_snapshot(&env)
     }
 
+    fn order_batch_lock_items(env: &Env, items: &Vec<LockFundsItem>) -> Vec<LockFundsItem> {
+        let mut ordered: Vec<LockFundsItem> = Vec::new(env);
+        for item in items.iter() {
+            let mut next: Vec<LockFundsItem> = Vec::new(env);
+            let mut inserted = false;
+            for existing in ordered.iter() {
+                if !inserted && item.bounty_id < existing.bounty_id {
+                    next.push_back(item.clone());
+                    inserted = true;
+                }
+                next.push_back(existing);
+            }
+            if !inserted {
+                next.push_back(item.clone());
+            }
+            ordered = next;
+        }
+        ordered
+    }
+
+    fn order_batch_release_items(
+        env: &Env,
+        items: &Vec<ReleaseFundsItem>,
+    ) -> Vec<ReleaseFundsItem> {
+        let mut ordered: Vec<ReleaseFundsItem> = Vec::new(env);
+        for item in items.iter() {
+            let mut next: Vec<ReleaseFundsItem> = Vec::new(env);
+            let mut inserted = false;
+            for existing in ordered.iter() {
+                if !inserted && item.bounty_id < existing.bounty_id {
+                    next.push_back(item.clone());
+                    inserted = true;
+                }
+                next.push_back(existing);
+            }
+            if !inserted {
+                next.push_back(item.clone());
+            }
+            ordered = next;
+        }
+        ordered
+    }
+
     /// Initialize the contract with the admin address and the token address (XLM).
     pub fn init(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
@@ -3456,8 +3499,16 @@ impl BountyEscrowContract {
     /// * BountyExists - if any bounty_id already exists
     /// * NotInitialized - if contract is not initialized
     ///
+    /// # Ordering Guarantee
+    /// Items are processed in ascending `bounty_id` order, regardless of caller
+    /// input ordering.
+    ///
     /// # Note
-    /// This operation is atomic - if any item fails, the entire transaction reverts.
+    /// This operation is atomic - if any item fails, the entire transaction
+    /// reverts.
+    /// # Reentrancy
+    /// Protected by the shared reentrancy guard. All escrow records are
+    /// written first; token transfers happen in a second pass (CEI).
     pub fn batch_lock_funds(env: Env, items: Vec<LockFundsItem>) -> Result<u32, Error> {
         if Self::check_paused(&env, symbol_short!("lock")) {
             return Err(Error::FundsPaused);
@@ -3518,10 +3569,12 @@ impl BountyEscrowContract {
             }
         }
 
+        let ordered_items = Self::order_batch_lock_items(&env, &items);
+
         // Collect unique depositors and require auth once for each
         // This prevents "frame is already authorized" errors when same depositor appears multiple times
         let mut seen_depositors: Vec<Address> = Vec::new(&env);
-        for item in items.iter() {
+        for item in ordered_items.iter() {
             let mut found = false;
             for seen in seen_depositors.iter() {
                 if seen.clone() == item.depositor {
@@ -3538,8 +3591,7 @@ impl BountyEscrowContract {
         // Process all items (atomic - all succeed or all fail)
         // First loop: write all state (escrow, indices). Second loop: transfers + events.
         let mut locked_count = 0u32;
-        for item in items.iter() {
-            // Create escrow record
+        for item in ordered_items.iter() {
             let escrow = Escrow {
                 depositor: item.depositor.clone(),
                 amount: item.amount,
@@ -3549,7 +3601,6 @@ impl BountyEscrowContract {
                 remaining_amount: item.amount,
             };
 
-            // Store escrow
             env.storage()
                 .persistent()
                 .set(&DataKey::Escrow(item.bounty_id), &escrow);
@@ -3561,7 +3612,6 @@ impl BountyEscrowContract {
                 );
             }
 
-            // Update EscrowIndex (same as lock_funds)
             let mut index: Vec<u64> = env
                 .storage()
                 .persistent()
@@ -3572,7 +3622,6 @@ impl BountyEscrowContract {
                 .persistent()
                 .set(&DataKey::EscrowIndex, &index);
 
-            // Update DepositorIndex
             let mut depositor_index: Vec<u64> = env
                 .storage()
                 .persistent()
@@ -3586,10 +3635,9 @@ impl BountyEscrowContract {
         }
 
         // INTERACTION: all external token transfers happen after state is finalized
-        for item in items.iter() {
+        for item in ordered_items.iter() {
             client.transfer(&item.depositor, &contract_address, &item.amount);
 
-            // Emit individual event for each locked bounty
             emit_funds_locked(
                 &env,
                 FundsLocked {
@@ -3605,13 +3653,15 @@ impl BountyEscrowContract {
             locked_count += 1;
         }
 
-        // Emit batch event
         emit_batch_funds_locked(
             &env,
             BatchFundsLocked {
                 version: EVENT_VERSION_V2,
                 count: locked_count,
-                total_amount: items.iter().map(|i| i.amount).sum(),
+                total_amount: ordered_items
+                    .iter()
+                    .try_fold(0i128, |acc, i| acc.checked_add(i.amount))
+                    .unwrap(),
                 timestamp,
             },
         );
@@ -3634,12 +3684,24 @@ impl BountyEscrowContract {
     /// * FundsNotLocked - if any bounty is not in Locked status
     /// * Unauthorized - if caller is not admin
     ///
+    /// # Ordering Guarantee
+    /// Items are processed in ascending `bounty_id` order, regardless of caller
+    /// input ordering.
+    ///
     /// # Note
-    /// This operation is atomic - if any item fails, the entire transaction reverts.
+    /// This operation is atomic - if any item fails, the entire transaction
+    /// reverts.
+    /// # Reentrancy
+    /// Protected by the shared reentrancy guard. All escrow records are
+    /// updated to `Released` first; token transfers happen in a second
+    /// pass (CEI).
     pub fn batch_release_funds(env: Env, items: Vec<ReleaseFundsItem>) -> Result<u32, Error> {
         if Self::check_paused(&env, symbol_short!("release")) {
             return Err(Error::FundsPaused);
         }
+        // GUARD: acquire reentrancy lock
+        reentrancy_guard::acquire(&env);
+
         // Validate batch size
         let batch_size = items.len();
         if batch_size == 0 {
@@ -3700,37 +3762,45 @@ impl BountyEscrowContract {
                 .ok_or(Error::InvalidAmount)?;
         }
 
-        // Process all items (atomic - all succeed or all fail)
+        let ordered_items = Self::order_batch_release_items(&env, &items);
+
+        // EFFECTS: update all escrow records before any external calls (CEI)
+        // We collect (contributor, amount) pairs for the transfer pass.
+        let mut release_pairs: Vec<(Address, i128)> = Vec::new(&env);
         let mut released_count = 0u32;
-        for item in items.iter() {
+        for item in ordered_items.iter() {
             let mut escrow: Escrow = env
                 .storage()
                 .persistent()
                 .get(&DataKey::Escrow(item.bounty_id))
                 .unwrap();
 
-            // Transfer funds to contributor
-            client.transfer(&contract_address, &item.contributor, &escrow.amount);
-
-            // Update escrow status
+            let amount = escrow.amount;
             escrow.status = EscrowStatus::Released;
+            escrow.remaining_amount = 0;
             env.storage()
                 .persistent()
                 .set(&DataKey::Escrow(item.bounty_id), &escrow);
 
-            // Emit individual event for each released bounty
+            release_pairs.push_back((item.contributor.clone(), amount));
+            released_count += 1;
+        }
+
+        // INTERACTION: all external token transfers happen after state is finalized
+        for (idx, item) in ordered_items.iter().enumerate() {
+            let (ref contributor, amount) = release_pairs.get(idx as u32).unwrap();
+            client.transfer(&contract_address, contributor, &amount);
+
             emit_funds_released(
                 &env,
                 FundsReleased {
                     version: EVENT_VERSION_V2,
                     bounty_id: item.bounty_id,
-                    amount: escrow.amount,
-                    recipient: item.contributor.clone(),
+                    amount,
+                    recipient: contributor.clone(),
                     timestamp,
                 },
             );
-
-            released_count += 1;
         }
 
         // Emit batch event
@@ -3744,6 +3814,8 @@ impl BountyEscrowContract {
             },
         );
 
+        // GUARD: release reentrancy lock
+        reentrancy_guard::release(&env);
         Ok(released_count)
     }
     pub fn update_metadata(

@@ -1032,6 +1032,45 @@ fn test_batch_lock_funds_success() {
 }
 
 #[test]
+fn test_batch_lock_funds_deterministic_ordering_by_bounty_id() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    let items = vec![
+        &setup.env,
+        LockFundsItem {
+            bounty_id: 30,
+            depositor: setup.depositor.clone(),
+            amount: 1000,
+            deadline,
+        },
+        LockFundsItem {
+            bounty_id: 10,
+            depositor: setup.depositor.clone(),
+            amount: 1000,
+            deadline,
+        },
+        LockFundsItem {
+            bounty_id: 20,
+            depositor: setup.depositor.clone(),
+            amount: 1000,
+            deadline,
+        },
+    ];
+
+    setup.token_admin.mint(&setup.depositor, &5_000);
+    let count = setup.escrow.batch_lock_funds(&items);
+    assert_eq!(count, 3);
+
+    let locked_ids = setup
+        .escrow
+        .get_escrow_ids_by_status(&EscrowStatus::Locked, &0, &10);
+    assert_eq!(locked_ids.get(0).unwrap(), 10);
+    assert_eq!(locked_ids.get(1).unwrap(), 20);
+    assert_eq!(locked_ids.get(2).unwrap(), 30);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #10)")]
 fn test_batch_lock_funds_empty() {
     let setup = TestSetup::new();
@@ -1412,6 +1451,49 @@ fn test_batch_release_funds_success() {
     assert_eq!(setup.token.balance(&contributor2), 2000);
     assert_eq!(setup.token.balance(&contributor3), 3000);
     assert_eq!(setup.escrow.get_balance(), 0);
+}
+
+#[test]
+fn test_batch_release_funds_deterministic_ordering_by_bounty_id() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &10, &1000, &deadline);
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &20, &2000, &deadline);
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &30, &3000, &deadline);
+
+    let contributor10 = Address::generate(&setup.env);
+    let contributor20 = Address::generate(&setup.env);
+    let contributor30 = Address::generate(&setup.env);
+
+    let items = vec![
+        &setup.env,
+        ReleaseFundsItem {
+            bounty_id: 30,
+            contributor: contributor30.clone(),
+        },
+        ReleaseFundsItem {
+            bounty_id: 10,
+            contributor: contributor10.clone(),
+        },
+        ReleaseFundsItem {
+            bounty_id: 20,
+            contributor: contributor20.clone(),
+        },
+    ];
+
+    let count = setup.escrow.batch_release_funds(&items);
+    assert_eq!(count, 3);
+
+    assert_eq!(setup.token.balance(&contributor10), 1000);
+    assert_eq!(setup.token.balance(&contributor20), 2000);
+    assert_eq!(setup.token.balance(&contributor30), 3000);
 }
 
 #[test]

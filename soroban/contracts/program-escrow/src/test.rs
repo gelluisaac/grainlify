@@ -150,6 +150,87 @@ fn test_batch_register_multiple_programs() {
 }
 
 #[test]
+fn test_batch_register_order_independent_results() {
+    setup!(
+        env_a,
+        client_a,
+        contract_id_a,
+        admin_a,
+        program_admin_a,
+        token_client_a,
+        token_admin_a,
+        50_000i128
+    );
+    setup!(
+        env_b,
+        client_b,
+        contract_id_b,
+        admin_b,
+        program_admin_b,
+        token_client_b,
+        token_admin_b,
+        50_000i128
+    );
+
+    let items_a = vec![
+        &env_a,
+        ProgramRegistrationItem {
+            program_id: 3,
+            admin: program_admin_a.clone(),
+            name: String::from_str(&env_a, "Gamma"),
+            total_funding: 5_000,
+        },
+        ProgramRegistrationItem {
+            program_id: 1,
+            admin: program_admin_a.clone(),
+            name: String::from_str(&env_a, "Alpha"),
+            total_funding: 10_000,
+        },
+        ProgramRegistrationItem {
+            program_id: 2,
+            admin: program_admin_a.clone(),
+            name: String::from_str(&env_a, "Beta"),
+            total_funding: 15_000,
+        },
+    ];
+    let items_b = vec![
+        &env_b,
+        ProgramRegistrationItem {
+            program_id: 2,
+            admin: program_admin_b.clone(),
+            name: String::from_str(&env_b, "Beta"),
+            total_funding: 15_000,
+        },
+        ProgramRegistrationItem {
+            program_id: 3,
+            admin: program_admin_b.clone(),
+            name: String::from_str(&env_b, "Gamma"),
+            total_funding: 5_000,
+        },
+        ProgramRegistrationItem {
+            program_id: 1,
+            admin: program_admin_b.clone(),
+            name: String::from_str(&env_b, "Alpha"),
+            total_funding: 10_000,
+        },
+    ];
+
+    assert_eq!(client_a.batch_register_programs(&items_a), 3);
+    assert_eq!(client_b.batch_register_programs(&items_b), 3);
+
+    for id in 1..=3 {
+        let p_a = client_a.get_program(&id);
+        let p_b = client_b.get_program(&id);
+        assert_eq!(p_a.name, p_b.name);
+        assert_eq!(p_a.total_funding, p_b.total_funding);
+        assert_eq!(p_a.status, p_b.status);
+    }
+
+    assert_eq!(token_client_a.balance(&contract_id_a), 30_000);
+    assert_eq!(token_client_b.balance(&contract_id_b), 30_000);
+}
+
+#[test]
 fn test_batch_register_single_item() {
     setup!(
         env,

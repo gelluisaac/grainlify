@@ -245,6 +245,29 @@ impl ProgramEscrowContract {
         );
     }
 
+    fn order_batch_registration_items(
+        env: &Env,
+        items: &Vec<ProgramRegistrationItem>,
+    ) -> Vec<ProgramRegistrationItem> {
+        let mut ordered: Vec<ProgramRegistrationItem> = Vec::new(env);
+        for item in items.iter() {
+            let mut next: Vec<ProgramRegistrationItem> = Vec::new(env);
+            let mut inserted = false;
+            for existing in ordered.iter() {
+                if !inserted && item.program_id < existing.program_id {
+                    next.push_back(item.clone());
+                    inserted = true;
+                }
+                next.push_back(existing);
+            }
+            if !inserted {
+                next.push_back(item.clone());
+            }
+            ordered = next;
+        }
+        ordered
+    }
+
     /// Initialize the contract with an admin and token address. Call once.
     pub fn init(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
@@ -377,6 +400,10 @@ impl ProgramEscrowContract {
     /// * `InvalidAmount` — zero or negative funding amount
     /// * `InvalidName` — empty program name
     /// * `NotInitialized` — contract has not been initialized
+    ///
+    /// # Ordering Guarantee
+    /// Registrations are processed in ascending `program_id` order,
+    /// independent of caller-provided item order.
     pub fn batch_register_programs(
         env: Env,
         items: Vec<ProgramRegistrationItem>,
@@ -399,8 +426,10 @@ impl ProgramEscrowContract {
         let token_client = token::Client::new(&env, &token_addr);
         let contract_address = env.current_contract_address();
 
+        let ordered_items = Self::order_batch_registration_items(&env, &items);
+
         // --- Validation pass (all-or-nothing) ---
-        for item in items.iter() {
+        for item in ordered_items.iter() {
             if env
                 .storage()
                 .persistent()
@@ -412,7 +441,7 @@ impl ProgramEscrowContract {
 
             // Detect duplicate program_ids within the batch
             let mut count = 0u32;
-            for other in items.iter() {
+            for other in ordered_items.iter() {
                 if other.program_id == item.program_id {
                     count += 1;
                 }
@@ -424,7 +453,7 @@ impl ProgramEscrowContract {
 
         // Collect unique admins and require auth once per admin
         let mut seen_admins: Vec<Address> = Vec::new(&env);
-        for item in items.iter() {
+        for item in ordered_items.iter() {
             let mut found = false;
             for seen in seen_admins.iter() {
                 if seen == item.admin {
@@ -440,7 +469,7 @@ impl ProgramEscrowContract {
 
         // --- Processing pass (atomic) ---
         let mut registered_count = 0u32;
-        for item in items.iter() {
+        for item in ordered_items.iter() {
             token_client.transfer(&item.admin, &contract_address, &item.total_funding);
 
             let program = Program {
