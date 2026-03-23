@@ -17,6 +17,7 @@ mod test_rbac;
 #[cfg(test)]
 mod test_risk_flags;
 mod traits;
+pub mod upgrade_safety;
 
 #[cfg(test)]
 mod test_maintenance_mode;
@@ -530,6 +531,8 @@ pub enum Error {
     /// Use get_escrow_info_v2 for anonymous escrows
     UseGetEscrowInfoV2ForAnonymous = 37,
     InvalidSelectionInput = 42,
+    /// Returned when an upgrade safety pre-check fails
+    UpgradeSafetyCheckFailed = 43,
 }
 
 pub const RISK_FLAG_HIGH_RISK: u32 = 1 << 0;
@@ -1029,7 +1032,17 @@ impl BountyEscrowContract {
         Ok(())
     }
 
-    /// Update pause flags (admin only)
+    /// Updates the granular pause state and metadata for the contract.
+    ///
+    /// # Arguments
+    /// * `lock` - If Some(true), prevents new escrows from being created.
+    /// * `release` - If Some(true), prevents payouts to contributors.
+    /// * `refund` - If Some(true), prevents depositors from reclaiming funds.
+    /// * `reason` - Optional UTF-8 string describing why the state was changed.
+    ///
+    /// # Errors
+    /// Returns `Error::NotInitialized` if the admin has not been set.
+    /// Returns `Error::Unauthorized` if the caller is not the registered admin.
     pub fn set_paused(
         env: Env,
         lock: Option<bool>,
@@ -1108,7 +1121,17 @@ impl BountyEscrowContract {
         Ok(())
     }
 
-    /// Emergency withdraw all funds (admin only, must have lock_paused = true)
+    /// Drains all reward tokens from the contract to a target address.
+    ///
+    /// This is an emergency recovery function and should only be used as a last resort.
+    /// The contract MUST have `lock_paused = true` before calling this.
+    ///
+    /// # Arguments
+    /// * `target` - The address that will receive the full contract balance.
+    ///
+    /// # Errors
+    /// Returns `Error::NotPaused` if `lock_paused` is false.
+    /// Returns `Error::Unauthorized` if the caller is not the admin.
     pub fn emergency_withdraw(env: Env, target: Address) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -2515,59 +2538,18 @@ impl BountyEscrowContract {
         if escrow.remaining_amount == 0 {
             escrow.status = EscrowStatus::Released;
         }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(bounty_id), &escrow);
-        let mut escrow: Escrow = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(bounty_id))
-            .unwrap();
-
-        if escrow.status != EscrowStatus::Locked {
-            return Err(Error::FundsNotLocked);
-        }
-
-        // Guard: zero or negative payout makes no sense and would corrupt state
-        if payout_amount <= 0 {
-            return Err(Error::InvalidAmount);
-        }
-
-        // Guard: prevent overpayment — payout cannot exceed what is still owed
-        if payout_amount > escrow.remaining_amount {
-            return Err(Error::InsufficientFunds);
-        }
-
-        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
-        let client = token::Client::new(&env, &token_addr);
-
-        // Transfer only the requested partial amount to the contributor
-        client.transfer(
-            &env.current_contract_address(),
-            &contributor,
-            &payout_amount,
-        );
-
-        // Decrement remaining; this is always an exact integer subtraction — no rounding
-        escrow.remaining_amount -= payout_amount;
-
-        // Automatically transition to Released once fully paid out
-        if escrow.remaining_amount == 0 {
-            escrow.status = EscrowStatus::Released;
-        }
 
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(bounty_id), &escrow);
 
-        let timestamp = env.ledger().timestamp();
         events::emit_funds_released(
             &env,
             FundsReleased {
                 version: EVENT_VERSION_V2,
                 bounty_id,
                 amount: payout_amount,
-                recipient: contributor.clone(),
+                recipient: contributor,
                 timestamp: env.ledger().timestamp(),
             },
         );
@@ -4476,7 +4458,6 @@ mod escrow_status_transition_tests {
                         &bounty_id,
                         &amount,
                         &deadline,
-                        &None,
                     );
                     assert!(
                         result.is_err(),
@@ -4589,7 +4570,7 @@ mod escrow_status_transition_tests {
         let result =
             setup
                 .client
-                .try_lock_funds(&setup.depositor, &bounty_id, &amount, &deadline, &None);
+                .try_lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
         assert!(
             result.is_err(),
             "Expected locking an already released bounty to fail"
@@ -4709,3 +4690,7 @@ mod test_sandbox;
 mod test_serialization_compatibility;
 #[cfg(test)]
 mod test_status_transitions;
+#[cfg(test)]
+mod test_e2e_upgrade_with_pause;
+#[cfg(test)]
+mod test_upgrade_scenarios;
