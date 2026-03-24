@@ -1580,7 +1580,7 @@ mod test {
 
     // WASM for testing
     pub const WASM: &[u8] =
-        include_bytes!("../target/wasm32-unknown-unknown/release/grainlify_core.wasm");
+        include_bytes!("../target/wasm32v1-none/release/grainlify_core.wasm");
 
     #[test]
     fn multisig_init_works() {
@@ -2123,13 +2123,4 @@ mod test {
         assert_eq!(state.to_version, 3);
     }
 
-    // Export WASM for testing upgrade/rollback scenarios.
-    //
-    // These tests are optional because the compiled WASM artifact isn't always
-    // available in CI/local `cargo test` flows.
-    #[cfg(all(test, feature = "upgrade_rollback_tests"))]
-    pub const WASM: &[u8] = include_bytes!("../target/wasm32v1-none/release/grainlify_core.wasm");
-
-    #[cfg(all(test, feature = "upgrade_rollback_tests"))]
-    mod upgrade_rollback_tests;
 }
