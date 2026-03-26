@@ -5106,12 +5106,16 @@ impl traits::EscrowInterface for BountyEscrowContract {
         amount: i128,
         deadline: u64,
     ) -> Result<(), crate::Error> {
-        BountyEscrowContract::lock_funds(env.clone(), depositor, bounty_id, amount, deadline)
+        let entrypoint: fn(Env, Address, u64, i128, u64) -> Result<(), crate::Error> =
+            BountyEscrowContract::lock_funds;
+        entrypoint(env.clone(), depositor, bounty_id, amount, deadline)
     }
 
     /// Release funds to contributor through the trait interface
     fn release_funds(env: &Env, bounty_id: u64, contributor: Address) -> Result<(), crate::Error> {
-        BountyEscrowContract::release_funds(env.clone(), bounty_id, contributor)
+        let entrypoint: fn(Env, u64, Address) -> Result<(), crate::Error> =
+            BountyEscrowContract::release_funds;
+        entrypoint(env.clone(), bounty_id, contributor)
     }
 
     /// Partial release through the trait interface
@@ -5121,44 +5125,57 @@ impl traits::EscrowInterface for BountyEscrowContract {
         contributor: Address,
         payout_amount: i128,
     ) -> Result<(), crate::Error> {
-        BountyEscrowContract::partial_release(env.clone(), bounty_id, contributor, payout_amount)
+        let entrypoint: fn(Env, u64, Address, i128) -> Result<(), crate::Error> =
+            BountyEscrowContract::partial_release;
+        entrypoint(env.clone(), bounty_id, contributor, payout_amount)
     }
 
     /// Batch lock funds through the trait interface
     fn batch_lock_funds(env: &Env, items: Vec<LockFundsItem>) -> Result<u32, crate::Error> {
-        BountyEscrowContract::batch_lock_funds(env.clone(), items)
+        let entrypoint: fn(Env, Vec<LockFundsItem>) -> Result<u32, crate::Error> =
+            BountyEscrowContract::batch_lock_funds;
+        entrypoint(env.clone(), items)
     }
 
     /// Batch release funds through the trait interface
     fn batch_release_funds(env: &Env, items: Vec<ReleaseFundsItem>) -> Result<u32, crate::Error> {
-        BountyEscrowContract::batch_release_funds(env.clone(), items)
+        let entrypoint: fn(Env, Vec<ReleaseFundsItem>) -> Result<u32, crate::Error> =
+            BountyEscrowContract::batch_release_funds;
+        entrypoint(env.clone(), items)
     }
 
     /// Refund funds to depositor through the trait interface
     fn refund(env: &Env, bounty_id: u64) -> Result<(), crate::Error> {
-        BountyEscrowContract::refund(env.clone(), bounty_id)
+        let entrypoint: fn(Env, u64) -> Result<(), crate::Error> = BountyEscrowContract::refund;
+        entrypoint(env.clone(), bounty_id)
     }
 
     /// Get escrow information through the trait interface
     fn get_escrow_info(env: &Env, bounty_id: u64) -> Result<crate::Escrow, crate::Error> {
-        BountyEscrowContract::get_escrow_info(env.clone(), bounty_id)
+        let entrypoint: fn(Env, u64) -> Result<crate::Escrow, crate::Error> =
+            BountyEscrowContract::get_escrow_info;
+        entrypoint(env.clone(), bounty_id)
     }
 
     /// Get contract balance through the trait interface
     fn get_balance(env: &Env) -> Result<i128, crate::Error> {
-        BountyEscrowContract::get_balance(env.clone())
+        let entrypoint: fn(Env) -> Result<i128, crate::Error> = BountyEscrowContract::get_balance;
+        entrypoint(env.clone())
     }
 }
 
 impl traits::UpgradeInterface for BountyEscrowContract {
     /// Get contract version
     fn get_version(env: &Env) -> u32 {
-        BountyEscrowContract::get_version(env.clone())
+        let entrypoint: fn(Env) -> u32 = BountyEscrowContract::get_version;
+        entrypoint(env.clone())
     }
 
     /// Set contract version (admin only)
     fn set_version(env: &Env, new_version: u32) -> Result<(), crate::Error> {
-        BountyEscrowContract::set_version(env.clone(), new_version)
+        let entrypoint: fn(Env, u32) -> Result<(), crate::Error> =
+            BountyEscrowContract::set_version;
+        entrypoint(env.clone(), new_version)
     }
 }
 
@@ -5170,7 +5187,14 @@ impl traits::PauseInterface for BountyEscrowContract {
         refund: Option<bool>,
         reason: Option<soroban_sdk::String>,
     ) -> Result<(), crate::Error> {
-        BountyEscrowContract::set_paused(env.clone(), lock, release, refund, reason)
+        let entrypoint: fn(
+            Env,
+            Option<bool>,
+            Option<bool>,
+            Option<bool>,
+            Option<soroban_sdk::String>,
+        ) -> Result<(), crate::Error> = BountyEscrowContract::set_paused;
+        entrypoint(env.clone(), lock, release, refund, reason)
     }
 
     fn get_pause_flags(env: &Env) -> crate::PauseFlags {
@@ -5199,7 +5223,14 @@ impl traits::FeeInterface for BountyEscrowContract {
         fee_recipient: Option<Address>,
         fee_enabled: Option<bool>,
     ) -> Result<(), crate::Error> {
-        BountyEscrowContract::update_fee_config(
+        let entrypoint: fn(
+            Env,
+            Option<i128>,
+            Option<i128>,
+            Option<Address>,
+            Option<bool>,
+        ) -> Result<(), crate::Error> = BountyEscrowContract::update_fee_config;
+        entrypoint(
             env.clone(),
             lock_fee_rate,
             release_fee_rate,
@@ -5209,7 +5240,8 @@ impl traits::FeeInterface for BountyEscrowContract {
     }
 
     fn get_fee_config(env: &Env) -> crate::FeeConfig {
-        BountyEscrowContract::get_fee_config(env.clone())
+        let entrypoint: fn(Env) -> crate::FeeConfig = BountyEscrowContract::get_fee_config;
+        entrypoint(env.clone())
     }
 }
 

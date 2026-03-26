@@ -733,7 +733,6 @@ mod reentrancy_guard_standalone_test;
 mod malicious_reentrant;
 
 #[cfg(test)]
-#[cfg(any())]
 mod test_granular_pause;
 
 #[cfg(test)]
@@ -2048,7 +2047,7 @@ impl ProgramEscrowContract {
                 version: EVENT_VERSION_V2,
                 program_id: program_data.program_id,
                 schedule_id,
-                recipient,
+                recipient: recipient.clone(),
                 amount,
                 release_timestamp,
             },
@@ -2749,6 +2748,10 @@ impl ProgramEscrowContract {
         }
     }
 
+    /// Reserve funds for a recipient-controlled claim.
+    ///
+    /// This is treated as part of the release path because it authorizes
+    /// a payout claim against escrowed program funds.
     pub fn create_pending_claim(
         env: Env,
         program_id: String,
@@ -2756,25 +2759,44 @@ impl ProgramEscrowContract {
         amount: i128,
         claim_deadline: u64,
     ) -> u64 {
+        if Self::check_paused(&env, symbol_short!("release")) {
+            panic!("Funds Paused");
+        }
         claim_period::create_pending_claim(&env, &program_id, &recipient, amount, claim_deadline)
     }
 
+    /// Execute a previously approved claim and transfer its reserved funds.
+    ///
+    /// Claims are part of the release path, so `release_paused` blocks them.
     pub fn execute_claim(env: Env, program_id: String, claim_id: u64, recipient: Address) {
+        if Self::check_paused(&env, symbol_short!("release")) {
+            panic!("Funds Paused");
+        }
         claim_period::execute_claim(&env, &program_id, claim_id, &recipient)
     }
 
+    /// Cancel a pending claim and return its reserved amount to escrow.
+    ///
+    /// Claim cancellation is a refund-path operation, so `refund_paused`
+    /// blocks it independently of lock and release operations.
     pub fn cancel_claim(env: Env, program_id: String, claim_id: u64, admin: Address) {
+        if Self::check_paused(&env, symbol_short!("refund")) {
+            panic!("Funds Paused");
+        }
         claim_period::cancel_claim(&env, &program_id, claim_id, &admin)
     }
 
+    /// Retrieve a stored claim record by program and claim id.
     pub fn get_claim(env: Env, program_id: String, claim_id: u64) -> claim_period::ClaimRecord {
         claim_period::get_claim(&env, &program_id, claim_id)
     }
 
+    /// Set the default claim window used by off-chain workflows.
     pub fn set_claim_window(env: Env, admin: Address, window_seconds: u64) {
         claim_period::set_claim_window(&env, &admin, window_seconds)
     }
 
+    /// Return the configured default claim window duration in seconds.
     pub fn get_claim_window(env: Env) -> u64 {
         claim_period::get_claim_window(&env)
     }
